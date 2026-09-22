@@ -1,0 +1,538 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "subject: fact sales data"
+        },
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -48,
+        112
+      ],
+      "id": "2441cc9e-bd4d-4043-b7bc-a23d9ab8b222",
+      "name": "Gmail Trigger",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GsSvTbtarJ5XAZVz",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "binaryPropertyName": "attachment_0",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        176,
+        112
+      ],
+      "id": "be4a7089-516a-4aeb-9962-84f120384c78",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\n\nconst requiredColumns = [\n  'date',\n  'product_code',\n  'customer_code',\n  'sold_quantity'\n];\n\nconst validatedRows = [];\nconst errors = [];\n\nconst seen = new Set();\n\nfor (let i = 0; i < rows.length; i++) {\n  const row = rows[i].json;\n  const rowNumber = i + 2;\n  const rowErrors = [];\n\n  // Required columns\n  for (const column of requiredColumns) {\n    if (!(column in row)) {\n      rowErrors.push(`Missing column: ${column}`);\n    }\n  }\n\n  if (rowErrors.length === 0) {\n\n    // Date\n    const date = String(row.date ?? '').trim();\n\n    if (!date) {\n      rowErrors.push('Date is missing');\n    } else if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) {\n      rowErrors.push('Invalid date format. Expected YYYY-MM-DD');\n    } else {\n      const parsedDate = new Date(`${date}T00:00:00Z`);\n\n      if (Number.isNaN(parsedDate.getTime())) {\n        rowErrors.push('Invalid date');\n      }\n    }\n\n    // Product code\n    const productCode = String(row.product_code ?? '').trim();\n\n    if (!productCode) {\n      rowErrors.push('Product code is missing');\n    } else if (productCode.length > 45) {\n      rowErrors.push('Product code exceeds 45 characters');\n    }\n\n    // Customer code\n    const customerCode = String(row.customer_code ?? '').trim();\n\n    if (!customerCode) {\n      rowErrors.push('Customer code is missing');\n    } else if (!/^\\d+$/.test(customerCode)) {\n      rowErrors.push('Customer code must be an integer');\n    }\n\n    // Sold quantity\n    const quantity = String(row.sold_quantity ?? '').trim();\n\n    if (!quantity) {\n      rowErrors.push('Sold quantity is missing');\n    } else if (!/^-?\\d+$/.test(quantity)) {\n      rowErrors.push('Sold quantity must be an integer');\n    } else if (Number(quantity) < 0) {\n      rowErrors.push('Sold quantity cannot be negative');\n    }\n\n    // Duplicate check\n    const duplicateKey =\n      `${date}|${productCode}|${customerCode}`;\n\n    if (seen.has(duplicateKey)) {\n      rowErrors.push(\n        'Duplicate record: date + product_code + customer_code'\n      );\n    } else {\n      seen.add(duplicateKey);\n    }\n  }\n\n  const validatedRow = {\n    ...row,\n    _row_number: rowNumber,\n    _validation_errors: rowErrors,\n    _is_valid: rowErrors.length === 0\n  };\n\n  validatedRows.push(validatedRow);\n\n  if (rowErrors.length > 0) {\n    errors.push({\n      row: rowNumber,\n      data: row,\n      errors: rowErrors\n    });\n  }\n}\n\nreturn validatedRows.map(row => ({\n  json: row\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        112
+      ],
+      "id": "47e4b68d-e74d-4c0a-8ab9-d0c960a08838",
+      "name": "Validate data"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  {{ JSON.stringify($json.date) }} AS date,\n  {{ JSON.stringify($json.product_code) }} AS product_code,\n  {{ Number($json.customer_code) }} AS customer_code,\n  {{ Number($json.sold_quantity) }} AS sold_quantity,\n  {{ Number($json._row_number) }} AS _row_number,\n\n  EXISTS (\n    SELECT 1\n    FROM dim_product\n    WHERE product_code = {{ JSON.stringify($json.product_code) }}\n  ) AS product_exists,\n\n  EXISTS (\n    SELECT 1\n    FROM dim_customer\n    WHERE customer_code = {{ Number($json.customer_code) }}\n  ) AS customer_exists,\n\n  EXISTS (\n    SELECT 1\n    FROM dim_date\n    WHERE date = {{ JSON.stringify($json.date) }}\n  ) AS date_exists;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        624,
+        112
+      ],
+      "id": "0008a420-3ddd-43be-9ace-b626462a3648",
+      "name": "Execute a SQL query",
+      "credentials": {
+        "mySql": {
+          "id": "yDFKX3VbJpd83x9n",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\n// Get the original validation results from Node 3\nconst node3Items = $('Validate data').all();\n\n// Create a lookup using row number\nconst node3Map = new Map();\n\nfor (const item of node3Items) {\n  const row = item.json;\n\n  node3Map.set(\n    Number(row._row_number),\n    row\n  );\n}\n\nreturn items.map(item => {\n  const row = item.json;\n\n  // Get original validation errors from Node 3\n  const originalRow = node3Map.get(\n    Number(row._row_number)\n  );\n\n  const errors = Array.isArray(originalRow?._validation_errors)\n    ? [...originalRow._validation_errors]\n    : [];\n\n  // Database reference validation from Node 4\n  if (Number(row.product_exists) !== 1) {\n    errors.push(\n      'Product code not found in dim_product'\n    );\n  }\n\n  if (Number(row.customer_exists) !== 1) {\n    errors.push(\n      'Customer code not found in dim_customer'\n    );\n  }\n\n  if (Number(row.date_exists) !== 1) {\n    errors.push(\n      'Date not found in dim_date'\n    );\n  }\n\n  return {\n    json: {\n      ...row,\n      _validation_errors: errors,\n      _is_valid: errors.length === 0\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        112
+      ],
+      "id": "8a85b827-85a3-487d-920d-77cebac477f8",
+      "name": "Final Validation"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(item => item.json);\n\nconst invalidRecords = rows\n  .filter(row => row._is_valid !== true)\n  .map(row => ({\n    _row_number: row._row_number,\n    date: row.date,\n    product_code: row.product_code,\n    customer_code: row.customer_code,\n    sold_quantity: row.sold_quantity,\n    _validation_errors: row._validation_errors\n  }));\n\nconst validRows = rows.filter(row => row._is_valid === true);\n\nreturn [{\n  json: {\n    validation_status: invalidRecords.length === 0 ? \"VALID\" : \"INVALID\",\n    total_rows: rows.length,\n    valid_rows: validRows.length,\n    invalid_rows: invalidRecords.length,\n    invalid_records: invalidRecords,\n    validated_rows: rows\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        112
+      ],
+      "id": "44c14c55-5426-4259-ac20-46661e33d2e2",
+      "name": "Validation Summary"
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "sendTo": "yash652005@gmail.com",
+        "subject": "Monthly Sales Upload — Validation Approval Required",
+        "message": "=<div style=\"max-width:680px;margin:0 auto;background:#ffffff;\nfont-family:Arial,Helvetica,sans-serif;color:#1f2937;padding:32px;\nborder:1px solid #e5e7eb;border-radius:12px;\">\n\n  <!-- HEADER -->\n  <div style=\"text-align:center;margin-bottom:28px;\">\n    <h1 style=\"margin:0;font-size:26px;color:#111827;\">\n      Monthly Sales Upload\n    </h1>\n\n    <p style=\"margin:8px 0 0;color:#6b7280;font-size:14px;\">\n      Validation Summary\n    </p>\n  </div>\n\n  <p style=\"text-align:center;font-size:14px;line-height:22px;color:#4b5563;\">\n    Please review the validation results below before approving the\n    <strong>MySQL upload.</strong>\n  </p>\n\n  <hr style=\"border:none;border-top:1px solid #e5e7eb;margin:25px 0;\">\n\n\n  <!-- VALIDATION OVERVIEW -->\n  <h2 style=\"text-align:center;font-size:18px;margin-bottom:20px;\">\n    Validation Overview\n  </h2>\n\n  <table style=\"width:100%;border-collapse:collapse;font-size:14px;\">\n\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #e5e7eb;\">\n        <strong>Status</strong>\n      </td>\n\n      <td style=\"padding:12px;text-align:right;border-bottom:1px solid #e5e7eb;\">\n        <strong style=\"color:{{ $json.validation_status === 'VALID' ? '#15803d' : '#dc2626' }};\">\n          {{ $json.validation_status }}\n        </strong>\n      </td>\n    </tr>\n\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #e5e7eb;\">\n        <strong>Total Rows</strong>\n      </td>\n      <td style=\"padding:12px;text-align:right;border-bottom:1px solid #e5e7eb;\">\n        {{ $json.total_rows }}\n      </td>\n    </tr>\n\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #e5e7eb;\">\n        <strong>Valid Rows</strong>\n      </td>\n      <td style=\"padding:12px;text-align:right;border-bottom:1px solid #e5e7eb;color:#15803d;\">\n        <strong>{{ $json.valid_rows }}</strong>\n      </td>\n    </tr>\n\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #e5e7eb;\">\n        <strong>Invalid Rows</strong>\n      </td>\n      <td style=\"padding:12px;text-align:right;border-bottom:1px solid #e5e7eb;color:#dc2626;\">\n        <strong>{{ $json.invalid_rows }}</strong>\n      </td>\n    </tr>\n\n  </table>\n\n\n  <!-- INVALID RECORDS -->\n  <div style=\"margin-top:30px;\">\n\n    <h2 style=\"font-size:18px;text-align:center;margin-bottom:18px;\">\n      Invalid Records\n    </h2>\n\n    {{\n      $json.invalid_records.length > 0\n\n      ? $json.invalid_records.map(item => `\n\n        <div style=\"\n          background:#fff7f7;\n          border:1px solid #fecaca;\n          border-left:4px solid #dc2626;\n          border-radius:8px;\n          padding:16px;\n          margin-bottom:12px;\n        \">\n\n          <div style=\"\n            font-size:14px;\n            font-weight:700;\n            color:#b91c1c;\n            margin-bottom:12px;\n          \">\n            Row ${item._row_number}\n          </div>\n\n          <table style=\"\n            width:100%;\n            border-collapse:collapse;\n            font-size:13px;\n            line-height:20px;\n          \">\n\n            <tr>\n              <td style=\"padding:3px 0;color:#6b7280;width:110px;\">Date</td>\n              <td style=\"padding:3px 0;font-weight:600;\">${item.date}</td>\n            </tr>\n\n            <tr>\n              <td style=\"padding:3px 0;color:#6b7280;\">Product</td>\n              <td style=\"padding:3px 0;font-weight:600;\">${item.product_code}</td>\n            </tr>\n\n            <tr>\n              <td style=\"padding:3px 0;color:#6b7280;\">Customer</td>\n              <td style=\"padding:3px 0;font-weight:600;\">${item.customer_code}</td>\n            </tr>\n\n            <tr>\n              <td style=\"padding:3px 0;color:#6b7280;\">Quantity</td>\n              <td style=\"padding:3px 0;font-weight:600;\">${item.sold_quantity}</td>\n            </tr>\n\n          </table>\n\n          <div style=\"\n            margin-top:12px;\n            padding:10px 12px;\n            background:#fee2e2;\n            border-radius:6px;\n            color:#991b1b;\n            font-size:13px;\n            line-height:19px;\n          \">\n            <strong>Error:</strong>\n            ${item._validation_errors.join(\", \")}\n          </div>\n\n        </div>\n\n      `).join(\"\")\n\n      : `\n\n        <div style=\"\n          background:#f0fdf4;\n          border:1px solid #bbf7d0;\n          border-left:4px solid #16a34a;\n          padding:16px;\n          border-radius:8px;\n          text-align:center;\n          color:#166534;\n          font-size:14px;\n        \">\n          <strong>✓ All records passed validation.</strong><br>\n          No invalid records were detected.\n        </div>\n\n      `\n    }}\n\n  </div>\n\n\n  <!-- ACTION REQUIRED -->\n  <div style=\"\n    margin-top:30px;\n    padding-top:24px;\n    border-top:1px solid #e5e7eb;\n    text-align:center;\n  \">\n\n    <h2 style=\"font-size:18px;margin:0 0 12px;\">\n      Action Required\n    </h2>\n\n    <p style=\"\n      font-size:14px;\n      color:#4b5563;\n      line-height:22px;\n      margin:0;\n    \">\n      Please review the validation results and select\n      <strong>Approve</strong> or <strong>Reject</strong> below.\n    </p>\n\n    <p style=\"\n      font-size:13px;\n      color:#9ca3af;\n      line-height:20px;\n      margin-top:10px;\n    \">\n      If approved, only the valid records will proceed to the MySQL upload process.\n    </p>\n\n  </div>\n\n</div>",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1296,
+        112
+      ],
+      "id": "b9444db0-b8e9-42ad-9eae-4d133916df13",
+      "name": "Send message and wait for response",
+      "webhookId": "1ee7e3dc-44f0-4c9e-88db-964246eb567f",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GsSvTbtarJ5XAZVz",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d76ddf8e-62fc-45f6-b51b-a17730a5b6f2",
+              "leftValue": "={{ $json.data.approved }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1520,
+        112
+      ],
+      "id": "c9764523-a7ce-4f2b-b5a6-b54d6da72fff",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "table": {
+          "__rl": true,
+          "value": "fact_sales_monthly",
+          "mode": "list",
+          "cachedResultName": "fact_sales_monthly"
+        },
+        "dataMode": "defineBelow",
+        "valuesToSend": {
+          "values": [
+            {
+              "column": "date",
+              "value": "={{ $json.date }}"
+            },
+            {
+              "column": "product_code",
+              "value": "={{ $json.product_code }}"
+            },
+            {
+              "column": "customer_code",
+              "value": "={{ $json.customer_code }}"
+            },
+            {
+              "column": "sold_quantity",
+              "value": "={{ $json.sold_quantity }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        2416,
+        16
+      ],
+      "id": "dc66c5fa-2159-4e21-8b08-4053a520ef25",
+      "name": "Insert rows in a table",
+      "credentials": {
+        "mySql": {
+          "id": "yDFKX3VbJpd83x9n",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "reply",
+        "messageId": "={{ $json.id }}",
+        "message": "<div style=\"max-width:680px;margin:0 auto;background:#ffffff; font-family:Arial,Helvetica,sans-serif;color:#1f2937;padding:32px; border:1px solid #e5e7eb;border-radius:12px;\">    <!-- HEADER -->   <div style=\"text-align:center;margin-bottom:24px;\">      <div style=\"       width:52px;       height:52px;       line-height:52px;       margin:0 auto 16px;       background:#fee2e2;       color:#dc2626;       border-radius:50%;       font-size:25px;       font-weight:bold;     \">       ×     </div>      <h1 style=\"margin:0;font-size:24px;color:#111827;\">       Monthly Sales Upload     </h1>      <p style=\"margin:8px 0 0;color:#6b7280;font-size:14px;\">       Upload Rejected     </p>    </div>    <hr style=\"border:none;border-top:1px solid #e5e7eb;margin:24px 0;\">    <!-- REJECTION MESSAGE -->   <div style=\"     background:#fff7f7;     border:1px solid #fecaca;     border-left:4px solid #dc2626;     border-radius:8px;     padding:16px;     margin-bottom:24px;     color:#991b1b;     font-size:14px;     line-height:21px;   \">     <strong>Upload approval was rejected.</strong><br>     The monthly sales records were not uploaded to the MySQL database.     No database insert was performed.   </div>    <!-- STATUS -->   <h2 style=\"text-align:center;font-size:18px;margin-bottom:18px;\">     Upload Status   </h2>    <table style=\"width:100%;border-collapse:collapse;font-size:14px;\">      <tr>       <td style=\"padding:12px;border-bottom:1px solid #e5e7eb;\">         <strong>Approval Status</strong>       </td>        <td style=\"         padding:12px;         text-align:right;         border-bottom:1px solid #e5e7eb;         color:#dc2626;         font-weight:bold;       \">         REJECTED       </td>     </tr>      <tr>       <td style=\"padding:12px;border-bottom:1px solid #e5e7eb;\">         <strong>MySQL Insert Status</strong>       </td>        <td style=\"         padding:12px;         text-align:right;         border-bottom:1px solid #e5e7eb;         color:#dc2626;         font-weight:bold;       \">         NOT INSERTED       </td>     </tr>    </table>    <!-- NEXT ACTION -->   <div style=\"     margin-top:26px;     background:#fffbeb;     border:1px solid #fde68a;     border-left:4px solid #f59e0b;     border-radius:8px;     padding:16px;     font-size:14px;     color:#92400e;     line-height:21px;   \">      <strong>Next Action</strong><br>      Review and correct the source CSV data, then resubmit the corrected     file for validation and approval.    </div>    <!-- SAFETY NOTE -->   <div style=\"     margin-top:16px;     padding:14px;     background:#f9fafb;     border-radius:8px;     text-align:center;     color:#6b7280;     font-size:13px;     line-height:20px;   \">     <strong style=\"color:#374151;\">Database Protected</strong><br>     No records from this rejected upload were inserted into     <strong>fact_sales_monthly</strong>.   </div>    <p style=\"     text-align:center;     color:#9ca3af;     font-size:12px;     margin:24px 0 0;   \">     Business 360 • Automated Data Validation & Upload   </p>  </div>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1968,
+        208
+      ],
+      "id": "27d5962a-3ebd-4150-8fa9-10edb01667b9",
+      "name": "Reply to a message",
+      "webhookId": "ca5b584b-bcfc-4d0f-9eaa-a396a04cec7c",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GsSvTbtarJ5XAZVz",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 1,
+        "simple": false,
+        "filters": {
+          "q": "subject:\"Monthly Sales Upload — Validation Approval Required\" from:dharmendar130150@gmail.com to:yash652005@gmail.com"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1744,
+        208
+      ],
+      "id": "244eabd9-b029-4d1f-bef2-06804f939a0b",
+      "name": "Get many messages",
+      "webhookId": "89043505-75fe-4189-8076-4be10ee529a5",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GsSvTbtarJ5XAZVz",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 1,
+        "simple": false,
+        "filters": {
+          "q": "subject:\"Monthly Sales Upload — Validation Approval Required\" from:dharmendar130150@gmail.com to:yash652005@gmail.com"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1744,
+        16
+      ],
+      "id": "8c2801ea-11b1-4923-bdb4-b222949e41ad",
+      "name": "Get many messages1",
+      "webhookId": "89043505-75fe-4189-8076-4be10ee529a5",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GsSvTbtarJ5XAZVz",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "reply",
+        "messageId": "={{ $json.id }}",
+        "message": "<div style=\"max-width:680px;margin:0 auto;background:#ffffff; font-family:Arial,Helvetica,sans-serif;color:#1f2937;padding:32px; border:1px solid #e5e7eb;border-radius:12px;\">    <!-- HEADER -->   <div style=\"text-align:center;margin-bottom:24px;\">      <div style=\"       width:52px;       height:52px;       line-height:52px;       margin:0 auto 16px;       background:#dcfce7;       color:#15803d;       border-radius:50%;       font-size:26px;       font-weight:bold;     \">       ✓     </div>      <h1 style=\"margin:0;font-size:24px;color:#111827;\">       Monthly Sales Upload     </h1>      <p style=\"margin:8px 0 0;color:#6b7280;font-size:14px;\">       Upload Completed Successfully     </p>    </div>    <hr style=\"border:none;border-top:1px solid #e5e7eb;margin:24px 0;\">    <!-- SUCCESS MESSAGE -->   <div style=\"     background:#f0fdf4;     border:1px solid #bbf7d0;     border-left:4px solid #16a34a;     border-radius:8px;     padding:16px;     margin-bottom:24px;     color:#166534;     font-size:14px;     line-height:21px;   \">     <strong>Approval received successfully.</strong><br>     The validated monthly sales records have been processed and inserted     into the MySQL database.   </div>    <!-- STATUS -->   <h2 style=\"text-align:center;font-size:18px;margin-bottom:18px;\">     Upload Status   </h2>    <table style=\"width:100%;border-collapse:collapse;font-size:14px;\">      <tr>       <td style=\"padding:12px;border-bottom:1px solid #e5e7eb;\">         <strong>Approval Status</strong>       </td>        <td style=\"         padding:12px;         text-align:right;         border-bottom:1px solid #e5e7eb;         color:#15803d;         font-weight:bold;       \">         APPROVED       </td>     </tr>      <tr>       <td style=\"padding:12px;border-bottom:1px solid #e5e7eb;\">         <strong>Database Status</strong>       </td>        <td style=\"         padding:12px;         text-align:right;         border-bottom:1px solid #e5e7eb;         color:#15803d;         font-weight:bold;       \">         SUCCESSFULLY INSERTED       </td>     </tr>    </table>    <!-- COMPLETION -->   <div style=\"     margin-top:26px;     padding:16px;     background:#f9fafb;     border-radius:8px;     text-align:center;     font-size:13px;     color:#6b7280;     line-height:20px;   \">     <strong style=\"color:#374151;\">Process Complete</strong><br>     The approved records are now stored in     <strong>fact_sales_monthly</strong>.   </div>    <p style=\"     text-align:center;     color:#9ca3af;     font-size:12px;     margin:24px 0 0;   \">     Business 360 • Automated Data Validation & Upload   </p>  </div>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1968,
+        16
+      ],
+      "id": "d58fac53-38fc-4d97-a5ff-cd98c99e72e5",
+      "name": "Reply to a message1",
+      "webhookId": "ca5b584b-bcfc-4d0f-9eaa-a396a04cec7c",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GsSvTbtarJ5XAZVz",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $('Final Validation').all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2192,
+        16
+      ],
+      "id": "65308dc4-065f-4b3c-950a-c1336b36d7cf",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "content": "## Data Validation\n\n",
+        "height": 480,
+        "width": 1088,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        112,
+        -48
+      ],
+      "id": "5a8a6233-a023-4e00-a976-42b3950e921f",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Approval Request and reply\n\n\n",
+        "height": 480,
+        "width": 896,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1232,
+        -64
+      ],
+      "id": "22a83fde-5a8d-4c13-80b0-56cbf24af155",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Data Insertion\n\n",
+        "height": 256,
+        "width": 416,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        -64
+      ],
+      "id": "9c698586-569b-453c-9523-0dcf0dd7a832",
+      "name": "Sticky Note2"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Validate data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate data": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Final Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Validation": {
+      "main": [
+        [
+          {
+            "node": "Validation Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation Summary": {
+      "main": [
+        [
+          {
+            "node": "Send message and wait for response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send message and wait for response": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Get many messages1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get many messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert rows in a table": {
+      "main": [
+        []
+      ]
+    },
+    "Get many messages": {
+      "main": [
+        [
+          {
+            "node": "Reply to a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many messages1": {
+      "main": [
+        [
+          {
+            "node": "Reply to a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to a message1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Insert rows in a table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "883da29a-138b-4186-8702-06940fed02ac",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "402637ea32d9451d4ccbf2c67dd41798b1dba3f22f8dbff184a650f5d34f2e99"
+  },
+  "id": "XCzJrvRkAEnmwPIc",
+  "tags": []
+}

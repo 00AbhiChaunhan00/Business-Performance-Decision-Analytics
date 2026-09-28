@@ -415,7 +415,7 @@ rather than optimizing only for sales volume.
 
 # 👥 Customer Analysis
 
-The Customer Performance page allows analysis of:
+The Customer Performance page allows analysis of
 
 - Net Sales
 - Gross Margin

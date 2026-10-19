@@ -181,8 +181,8 @@ The objective was to build an analytics solution capable of:
 1. Monitoring business performance.
 2. Comparing current performance with previous year / targets.
 3. Identifying loss-making markets and products.
-4. Monitoring forecast and inventory risk.
-5. Automatically validating incoming data.
+4. Monitoring forecast and inventory risk
+5. Automatically validating incoming data
 6. Highlighting important exceptions.
 7. Enabling root-cause analysis.
 8. Providing executives with a consolidated view of business performance.
